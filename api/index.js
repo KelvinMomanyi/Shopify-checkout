@@ -1,12 +1,5 @@
 // api/index.js
-import express from "express";
 import Shopify from "shopify-api-node";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-const app = express();
-app.use(express.json());
 
 const shopify = new Shopify({
   shopName: process.env.SHOPIFY_SHOP_NAME,
@@ -15,42 +8,51 @@ const shopify = new Shopify({
   autoLimit: true
 });
 
-// ========== ROUTES ==========
+export default async function handler(req, res) {
+  // Set CORS headers if needed
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-// Health check
-app.get("/health", (req, res) => {
-  res.json({ status: "OK", timestamp: new Date().toISOString() });
-});
-
-// Example route: create draft order (Approach 2)
-app.post("/apps/cart/create-checkout", async (req, res) => {
-  try {
-    const { items, customer_email } = req.body;
-
-    const lineItems = items.map(item => ({
-      variant_id: parseInt(item.variant_id),
-      quantity: parseInt(item.quantity),
-      price: (item.custom_price_cents / 100).toFixed(2)
-    }));
-
-    const draftOrder = await shopify.draftOrder.create({
-      line_items: lineItems,
-      email: customer_email || null,
-      use_customer_default_address: true,
-      note: "Custom pricing applied based on product configuration",
-      tags: "custom-pricing"
-    });
-
-    res.json({
-      success: true,
-      checkout_url: draftOrder.invoice_url,
-      total_price: draftOrder.total_price
-    });
-  } catch (error) {
-    console.error("❌ Error creating draft order:", error);
-    res.status(500).json({ error: error.message });
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
   }
-});
 
-// Export handler for Vercel
-export default app;
+  // Health check
+  if (req.method === 'GET' && req.url === '/health') {
+    return res.json({ status: "OK", timestamp: new Date().toISOString() });
+  }
+
+  // Create checkout
+  if (req.method === 'POST' && req.url === '/create-checkout') {
+    try {
+      const { items, customer_email } = req.body;
+
+      const lineItems = items.map(item => ({
+        variant_id: parseInt(item.variant_id),
+        quantity: parseInt(item.quantity),
+        price: (item.custom_price_cents / 100).toFixed(2)
+      }));
+
+      const draftOrder = await shopify.draftOrder.create({
+        line_items: lineItems,
+        email: customer_email || null,
+        use_customer_default_address: true,
+        note: "Custom pricing applied based on product configuration",
+        tags: "custom-pricing"
+      });
+
+      return res.json({
+        success: true,
+        checkout_url: draftOrder.invoice_url,
+        total_price: draftOrder.total_price
+      });
+    } catch (error) {
+      console.error("❌ Error creating draft order:", error);
+      return res.status(500).json({ error: error.message });
+    }
+  }
+
+  return res.status(404).json({ error: "Not found" });
+}
