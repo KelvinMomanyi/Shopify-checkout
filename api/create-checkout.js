@@ -292,6 +292,7 @@
 // api/create-checkout.js
 const Shopify = require('shopify-api-node');
 
+// Initialize Shopify
 const shopify = new Shopify({
   shopName: process.env.SHOPIFY_SHOP_NAME,
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -300,16 +301,18 @@ const shopify = new Shopify({
 });
 
 module.exports = async (req, res) => {
-  // CORS headers
+  // Set CORS headers
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
+  // Handle preflight
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
+  // Only allow POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -317,64 +320,105 @@ module.exports = async (req, res) => {
   try {
     const { items, customer_email } = req.body;
 
-    if (!items || !Array.isArray(items)) {
-      return res.status(400).json({ error: 'Invalid items array' });
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Invalid or empty items array' });
     }
 
     console.log(`🛒 Creating draft order for ${items.length} items...`);
+    console.log('Customer email:', customer_email || 'Not provided');
 
     // Build line items with custom prices
-    const lineItems = items.map(item => ({
-      variant_id: item.variant_id,
-      quantity: item.quantity,
-      // This is the key: use your calculated total price
-      price: (item.custom_price_cents / 100).toFixed(2),
-      // Optional: Add properties to show the breakdown
-      properties: item.price_breakdown ? [
-        { name: 'Base Price', value: `£${(item.price_breakdown.base / 100).toFixed(2)}` },
-        { name: 'Fabric', value: item.price_breakdown.fabric_name },
-        { name: 'Fabric Price', value: `£${(item.price_breakdown.fabric / 100).toFixed(2)}` },
-        ...(item.price_breakdown.extras || []).map(extra => ({
-          name: extra.name,
-          value: `£${(extra.price / 100).toFixed(2)}`
-        }))
-      ] : []
-    }));
+    const lineItems = items.map(item => {
+      const lineItem = {
+        variant_id: item.variant_id,
+        quantity: item.quantity,
+        price: (item.custom_price_cents / 100).toFixed(2)
+      };
 
-    // Create draft order
-    const draftOrder = await shopify.draftOrder.create({
-      line_items: lineItems,
-      email: customer_email,
-      use_customer_default_address: true,
-      // Optional: add note about custom pricing
-      note: 'Custom configured pricing with fabric and extras',
-      // Tax settings
-      tax_exempt: false,
-      // You can also set shipping if needed
+      // Add price breakdown as line item properties (optional)
+      if (item.price_breakdown) {
+        lineItem.properties = [];
+        
+        if (item.price_breakdown.base) {
+          lineItem.properties.push({
+            name: 'Base Price',
+            value: `£${(item.price_breakdown.base / 100).toFixed(2)}`
+          });
+        }
+        
+        if (item.price_breakdown.fabric_name) {
+          lineItem.properties.push({
+            name: 'Fabric',
+            value: item.price_breakdown.fabric_name
+          });
+        }
+        
+        if (item.price_breakdown.fabric) {
+          lineItem.properties.push({
+            name: 'Fabric Price',
+            value: `£${(item.price_breakdown.fabric / 100).toFixed(2)}`
+          });
+        }
+        
+        if (item.price_breakdown.additional) {
+          lineItem.properties.push({
+            name: 'Additional Options',
+            value: `£${(item.price_breakdown.additional / 100).toFixed(2)}`
+          });
+        }
+      }
+
+      return lineItem;
     });
 
+    console.log('Line items prepared:', JSON.stringify(lineItems, null, 2));
+
+    // Create draft order
+    const draftOrderData = {
+      line_items: lineItems,
+      note: 'Custom configured pricing with fabric and additional options',
+      tax_exempt: false
+    };
+
+    // Add email if provided
+    if (customer_email && customer_email.trim() !== '') {
+      draftOrderData.email = customer_email;
+      draftOrderData.use_customer_default_address = true;
+    }
+
+    const draftOrder = await shopify.draftOrder.create(draftOrderData);
+
     console.log(`✅ Draft order created: ${draftOrder.id}`);
+    console.log(`Invoice URL: ${draftOrder.invoice_url}`);
 
-    // Get the invoice URL (this is where customer checks out)
-    const invoiceUrl = draftOrder.invoice_url;
-
+    // Return success with checkout URL
     res.json({
       success: true,
       draft_order_id: draftOrder.id,
-      checkout_url: invoiceUrl,
+      checkout_url: draftOrder.invoice_url,
       total: draftOrder.total_price,
+      currency: draftOrder.currency,
       line_items: draftOrder.line_items.map(item => ({
         title: item.title,
+        variant_title: item.variant_title,
         price: item.price,
-        quantity: item.quantity
+        quantity: item.quantity,
+        total: (parseFloat(item.price) * item.quantity).toFixed(2)
       }))
     });
 
   } catch (error) {
     console.error('❌ Draft order creation error:', error);
+    
+    // More detailed error logging
+    if (error.response) {
+      console.error('Shopify API Response:', error.response.body);
+    }
+    
     return res.status(500).json({
       error: 'Failed to create checkout',
-      details: error.message
+      details: error.message,
+      shopify_error: error.response?.body?.errors || null
     });
   }
 };
