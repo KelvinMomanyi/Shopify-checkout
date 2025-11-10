@@ -1,4 +1,4 @@
-// // api/sync-prices.js
+// // api/create-checkout.js
 // const Shopify = require('shopify-api-node');
 
 // // Initialize Shopify (reused across invocations in same container)
@@ -286,139 +286,112 @@
 // //   }
 // // };
 
-
-
-
-// api/create-checkout.js
-const Shopify = require('shopify-api-node');
-
-// Initialize Shopify
-const shopify = new Shopify({
-  shopName: process.env.SHOPIFY_SHOP_NAME,
-  apiKey: process.env.SHOPIFY_API_KEY,
-  password: process.env.SHOPIFY_ADMIN_API_TOKEN,
-  autoLimit: true
-});
-
-module.exports = async (req, res) => {
-  // Set CORS headers
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  // Handle preflight
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  try {
-    const { items, customer_email } = req.body;
-
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'Invalid or empty items array' });
-    }
-
-    console.log(`🛒 Creating draft order for ${items.length} items...`);
-    console.log('Customer email:', customer_email || 'Not provided');
-
-    // Build line items with custom prices
-    const lineItems = items.map(item => {
-      const lineItem = {
-        variant_id: item.variant_id,
-        quantity: item.quantity,
-        price: (item.custom_price_cents / 100).toFixed(2)
-      };
-
-      // Add price breakdown as line item properties (optional)
-      if (item.price_breakdown) {
-        lineItem.properties = [];
+// Custom checkout from notification
+document.addEventListener('DOMContentLoaded', function() {
+  const notificationCheckoutBtn = document.querySelector('.js-notification-custom-checkout');
+  
+  if (notificationCheckoutBtn) {
+    notificationCheckoutBtn.addEventListener('click', async function(e) {
+      e.preventDefault();
+      
+      // Show loading state
+      const buttonText = this.querySelector('.js-checkout-button-text');
+      const loadingText = this.querySelector('.js-checkout-loading');
+      buttonText.style.display = 'none';
+      loadingText.style.display = 'inline';
+      this.disabled = true;
+      
+      try {
+        // Fetch current cart data
+        const cartResponse = await fetch('/cart.js');
+        const cart = await cartResponse.json();
         
-        if (item.price_breakdown.base) {
-          lineItem.properties.push({
-            name: 'Base Price',
-            value: `£${(item.price_breakdown.base / 100).toFixed(2)}`
-          });
+        // Build items with accurate price breakdown
+        const items = cart.items.map(item => {
+          // Get metafield base price for this product
+          let basePrice = item.price; // Default to variant price
+          
+          // Extract custom pricing from properties
+          let fabricPrice = 0;
+          let fabricName = '';
+          let additionalPrice = 0;
+          
+          if (item.properties) {
+            Object.entries(item.properties).forEach(([key, value]) => {
+              if (key === '_FabricPrice' && value) {
+                fabricPrice = Math.round(parseFloat(value) * 100);
+              }
+              if (key === 'Fabric') {
+                fabricName = value;
+              }
+              if (key === '_AdditionalPrice' && value) {
+                additionalPrice = Math.round(parseFloat(value) * 100);
+              }
+              // Check if there's a base price override
+              if (key === '_BasePrice' && value) {
+                basePrice = Math.round(parseFloat(value) * 100);
+              }
+            });
+          }
+          
+          // Calculate total custom price per unit
+          const customPriceCents = basePrice + fabricPrice + additionalPrice;
+          
+          return {
+            variant_id: item.variant_id,
+            quantity: item.quantity,
+            custom_price_cents: customPriceCents,
+            shopify_price_cents: item.price, // Original variant price
+            price_breakdown: {
+              base: basePrice,
+              fabric_name: fabricName,
+              fabric: fabricPrice,
+              additional: additionalPrice
+            },
+            title: item.product_title,
+            variant_title: item.variant_title
+          };
+        });
+        
+        // Get customer email if logged in (optional)
+        let customerEmail = '';
+        if (window.Shopify && window.Shopify.customerEmail) {
+          customerEmail = window.Shopify.customerEmail;
         }
         
-        if (item.price_breakdown.fabric_name) {
-          lineItem.properties.push({
-            name: 'Fabric',
-            value: item.price_breakdown.fabric_name
-          });
-        }
+        // Call your API endpoint
+        const response = await fetch('https://shopify-checkout-hgi6.vercel.app/api/create-checkout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            items: items,
+            customer_email: customerEmail
+          })
+        });
         
-        if (item.price_breakdown.fabric) {
-          lineItem.properties.push({
-            name: 'Fabric Price',
-            value: `£${(item.price_breakdown.fabric / 100).toFixed(2)}`
-          });
-        }
+        const result = await response.json();
         
-        if (item.price_breakdown.additional) {
-          lineItem.properties.push({
-            name: 'Additional Options',
-            value: `£${(item.price_breakdown.additional / 100).toFixed(2)}`
-          });
+        if (result.success && result.checkout_url) {
+          // Close notification
+          const closeBtn = document.querySelector('[data-notification-close]');
+          if (closeBtn) closeBtn.click();
+          
+          // Redirect to draft order checkout
+          window.location.href = result.checkout_url;
+        } else {
+          throw new Error(result.error || 'Failed to create checkout');
         }
+      } catch (error) {
+        console.error('Checkout error:', error);
+        alert('Failed to process checkout. Please try again or use the standard checkout.');
+        
+        // Reset button state
+        buttonText.style.display = 'inline';
+        loadingText.style.display = 'none';
+        this.disabled = false;
       }
-
-      return lineItem;
-    });
-
-    console.log('Line items prepared:', JSON.stringify(lineItems, null, 2));
-
-    // Create draft order
-    const draftOrderData = {
-      line_items: lineItems,
-      note: 'Custom configured pricing with fabric and additional options',
-      tax_exempt: false
-    };
-
-    // Add email if provided
-    if (customer_email && customer_email.trim() !== '') {
-      draftOrderData.email = customer_email;
-      draftOrderData.use_customer_default_address = true;
-    }
-
-    const draftOrder = await shopify.draftOrder.create(draftOrderData);
-
-    console.log(`✅ Draft order created: ${draftOrder.id}`);
-    console.log(`Invoice URL: ${draftOrder.invoice_url}`);
-
-    // Return success with checkout URL
-    res.json({
-      success: true,
-      draft_order_id: draftOrder.id,
-      checkout_url: draftOrder.invoice_url,
-      total: draftOrder.total_price,
-      currency: draftOrder.currency,
-      line_items: draftOrder.line_items.map(item => ({
-        title: item.title,
-        variant_title: item.variant_title,
-        price: item.price,
-        quantity: item.quantity,
-        total: (parseFloat(item.price) * item.quantity).toFixed(2)
-      }))
-    });
-
-  } catch (error) {
-    console.error('❌ Draft order creation error:', error);
-    
-    // More detailed error logging
-    if (error.response) {
-      console.error('Shopify API Response:', error.response.body);
-    }
-    
-    return res.status(500).json({
-      error: 'Failed to create checkout',
-      details: error.message,
-      shopify_error: error.response?.body?.errors || null
     });
   }
-};
+});
