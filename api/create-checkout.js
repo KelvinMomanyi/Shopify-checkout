@@ -432,6 +432,199 @@
 //   }
 // };
 
+// const Shopify = require('shopify-api-node');
+
+// const shopify = new Shopify({
+//   shopName: process.env.SHOPIFY_SHOP_NAME,
+//   apiKey: process.env.SHOPIFY_API_KEY,
+//   password: process.env.SHOPIFY_ADMIN_API_TOKEN,
+//   autoLimit: true
+// });
+
+// module.exports = async (req, res) => {
+//   // Log everything for debugging
+//   console.log('🔍 Request received:', {
+//     method: req.method,
+//     url: req.url,
+//     query: req.query,
+//     headers: {
+//       'content-type': req.headers['content-type'],
+//       'user-agent': req.headers['user-agent']
+//     }
+//   });
+
+//   // CORS headers
+//   res.setHeader('Access-Control-Allow-Credentials', true);
+//   res.setHeader('Access-Control-Allow-Origin', '*');
+//   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+//   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+//   // Handle OPTIONS preflight
+//   if (req.method === 'OPTIONS') {
+//     console.log('✅ OPTIONS preflight - responding with 200');
+//     return res.status(200).end();
+//   }
+
+//   // Temporary: Handle GET for testing
+//   if (req.method === 'GET') {
+//     console.log('⚠️ GET request received - this should be POST');
+//     return res.status(200).json({
+//       message: 'API endpoint is working!',
+//       note: 'This endpoint expects POST requests with cart data',
+//       method_received: 'GET',
+//       expected_method: 'POST',
+//       timestamp: new Date().toISOString(),
+//       environment: process.env.NODE_ENV
+//     });
+//   }
+
+//   // Only allow POST for actual checkout
+//   if (req.method !== 'POST') {
+//     console.log(`❌ Method ${req.method} not allowed`);
+//     return res.status(405).json({ 
+//       error: 'Method not allowed',
+//       received_method: req.method,
+//       expected_method: 'POST'
+//     });
+//   }
+
+//   try {
+//     // Log raw body for debugging
+//     console.log('📦 Request body:', JSON.stringify(req.body, null, 2));
+
+//     const { items, customer_email, cart_token } = req.body;
+
+//     if (!items || !Array.isArray(items) || items.length === 0) {
+//       console.log('❌ Invalid items array');
+//       return res.status(400).json({ error: 'Invalid items array' });
+//     }
+
+//     console.log(`📦 Creating draft order for ${items.length} items...`);
+
+//     // Build line items with custom prices
+//     const lineItems = items.map(item => {
+//       const customPrice = (item.custom_price_cents / 100).toFixed(2);
+      
+//       // Build properties array - Shopify expects {name, value} format
+//       const properties = [];
+      
+//       if (item.price_breakdown) {
+//         const { base, fabric_name, fabric, additional } = item.price_breakdown;
+        
+//         // Add fabric name if present
+//         if (fabric_name) {
+//           properties.push({
+//             name: 'Fabric',
+//             value: fabric_name
+//           });
+//         }
+        
+//         // Add price breakdown as line item properties
+//         if (base > 0) {
+//           properties.push({
+//             name: '_Base Price',
+//             value: `£${(base / 100).toFixed(2)}`
+//           });
+//         }
+        
+//         if (fabric > 0) {
+//           properties.push({
+//             name: '_Fabric Upcharge',
+//             value: `£${(fabric / 100).toFixed(2)}`
+//           });
+//         }
+        
+//         if (additional > 0) {
+//           properties.push({
+//             name: '_Additional Options',
+//             value: `£${(additional / 100).toFixed(2)}`
+//           });
+//         }
+//       }
+
+//       console.log(`  - Item: Variant ${item.variant_id}, Qty: ${item.quantity}, Price: £${customPrice}`);
+
+//       return {
+//         variant_id: item.variant_id,
+//         quantity: item.quantity,
+//         price: customPrice,
+//         properties: properties.length > 0 ? properties : undefined
+//       };
+//     });
+
+//     // Create draft order payload
+//     const draftOrderData = {
+//       line_items: lineItems,
+//       use_customer_default_address: true,
+//       note: 'Custom pricing applied via checkout app'
+//     };
+
+//     // Add customer email if provided
+//     if (customer_email && customer_email.trim() !== '') {
+//       draftOrderData.email = customer_email.trim();
+//       console.log(`👤 Customer email: ${customer_email}`);
+//     } else {
+//       console.log('👤 Guest checkout (no email provided)');
+//     }
+
+//     // Add cart token to note if provided
+//     if (cart_token) {
+//       draftOrderData.note += `\nCart Token: ${cart_token}`;
+//     }
+
+//     console.log('📤 Creating draft order with data:', JSON.stringify(draftOrderData, null, 2));
+
+//     // Create the draft order
+//     const draftOrder = await shopify.draftOrder.create(draftOrderData);
+
+//     console.log(`✅ Draft order created: ID ${draftOrder.id}, Name: ${draftOrder.name}`);
+
+//     // Complete the draft order to generate invoice URL
+//     const completedDraftOrder = await shopify.draftOrder.complete(draftOrder.id);
+
+//     console.log(`✅ Draft order completed. Invoice URL: ${completedDraftOrder.invoice_url}`);
+
+//     // Return the invoice URL (this is the checkout page)
+//     res.status(200).json({
+//       success: true,
+//       checkout_url: completedDraftOrder.invoice_url,
+//       draft_order_id: draftOrder.id,
+//       order_name: draftOrder.name,
+//       total_price: completedDraftOrder.total_price,
+//       line_items_count: lineItems.length
+//     });
+
+//   } catch (error) {
+//     console.error('❌ Draft order creation error:', error);
+    
+//     // Parse Shopify API errors
+//     let errorMessage = error.message;
+//     let errorDetails = {};
+    
+//     if (error.response && error.response.body) {
+//       errorDetails = error.response.body;
+//       if (errorDetails.errors) {
+//         errorMessage = JSON.stringify(errorDetails.errors);
+//       }
+//     }
+    
+//     console.error('❌ Error details:', {
+//       message: errorMessage,
+//       details: errorDetails,
+//       stack: error.stack
+//     });
+    
+//     return res.status(500).json({
+//       success: false,
+//       error: 'Failed to create checkout',
+//       message: errorMessage,
+//       details: errorDetails,
+//       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+//     });
+//   }
+// };
+
+
 const Shopify = require('shopify-api-node');
 
 const shopify = new Shopify({
@@ -446,18 +639,22 @@ module.exports = async (req, res) => {
   console.log('🔍 Request received:', {
     method: req.method,
     url: req.url,
+    path: req.path || 'no path',
     query: req.query,
     headers: {
       'content-type': req.headers['content-type'],
-      'user-agent': req.headers['user-agent']
-    }
+      'user-agent': req.headers['user-agent'],
+      'host': req.headers['host']
+    },
+    bodyPresent: !!req.body,
+    bodyType: typeof req.body
   });
 
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Credentials', true);
+  // CORS headers - allow all origins for Shopify app proxy
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
 
   // Handle OPTIONS preflight
   if (req.method === 'OPTIONS') {
@@ -465,44 +662,66 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  // Temporary: Handle GET for testing
+  // Handle GET for testing/debugging
   if (req.method === 'GET') {
-    console.log('⚠️ GET request received - this should be POST');
+    console.log('⚠️ GET request received - this endpoint expects POST');
     return res.status(200).json({
-      message: 'API endpoint is working!',
-      note: 'This endpoint expects POST requests with cart data',
+      status: 'API endpoint is working!',
+      message: 'This endpoint expects POST requests with cart data',
       method_received: 'GET',
       expected_method: 'POST',
       timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV
+      environment: process.env.NODE_ENV || 'production',
+      shopify_configured: !!(process.env.SHOPIFY_SHOP_NAME && process.env.SHOPIFY_API_KEY),
+      endpoint: '/api/create-checkout',
+      test_instructions: 'Send a POST request with a JSON body containing an "items" array'
     });
   }
 
-  // Only allow POST for actual checkout
+  // Only allow POST for actual checkout creation
   if (req.method !== 'POST') {
     console.log(`❌ Method ${req.method} not allowed`);
     return res.status(405).json({ 
       error: 'Method not allowed',
       received_method: req.method,
-      expected_method: 'POST'
+      expected_method: 'POST',
+      allowed_methods: ['POST', 'OPTIONS', 'GET']
     });
   }
 
   try {
-    // Log raw body for debugging
-    console.log('📦 Request body:', JSON.stringify(req.body, null, 2));
+    // Parse body if it's a string (sometimes Vercel doesn't auto-parse)
+    let body = req.body;
+    if (typeof body === 'string') {
+      console.log('📦 Parsing body from string...');
+      body = JSON.parse(body);
+    }
 
-    const { items, customer_email, cart_token } = req.body;
+    console.log('📦 Request body:', JSON.stringify(body, null, 2));
 
+    const { items, customer_email, cart_token } = body;
+
+    // Validate items array
     if (!items || !Array.isArray(items) || items.length === 0) {
-      console.log('❌ Invalid items array');
-      return res.status(400).json({ error: 'Invalid items array' });
+      console.log('❌ Invalid items array:', { items, isArray: Array.isArray(items), length: items?.length });
+      return res.status(400).json({ 
+        error: 'Invalid items array',
+        received_items: items,
+        expected: 'Array of items with variant_id, quantity, and custom_price_cents'
+      });
     }
 
     console.log(`📦 Creating draft order for ${items.length} items...`);
 
     // Build line items with custom prices
-    const lineItems = items.map(item => {
+    const lineItems = items.map((item, index) => {
+      console.log(`  Processing item ${index + 1}/${items.length}:`, {
+        variant_id: item.variant_id,
+        quantity: item.quantity,
+        custom_price_cents: item.custom_price_cents,
+        title: item.title
+      });
+
       const customPrice = (item.custom_price_cents / 100).toFixed(2);
       
       // Build properties array - Shopify expects {name, value} format
@@ -542,7 +761,7 @@ module.exports = async (req, res) => {
         }
       }
 
-      console.log(`  - Item: Variant ${item.variant_id}, Qty: ${item.quantity}, Price: £${customPrice}`);
+      console.log(`  ✓ Item ${index + 1}: Variant ${item.variant_id}, Qty: ${item.quantity}, Price: £${customPrice}`);
 
       return {
         variant_id: item.variant_id,
@@ -572,7 +791,8 @@ module.exports = async (req, res) => {
       draftOrderData.note += `\nCart Token: ${cart_token}`;
     }
 
-    console.log('📤 Creating draft order with data:', JSON.stringify(draftOrderData, null, 2));
+    console.log('📤 Creating draft order with Shopify API...');
+    console.log('📤 Draft order data:', JSON.stringify(draftOrderData, null, 2));
 
     // Create the draft order
     const draftOrder = await shopify.draftOrder.create(draftOrderData);
@@ -580,19 +800,24 @@ module.exports = async (req, res) => {
     console.log(`✅ Draft order created: ID ${draftOrder.id}, Name: ${draftOrder.name}`);
 
     // Complete the draft order to generate invoice URL
+    console.log('🔄 Completing draft order...');
     const completedDraftOrder = await shopify.draftOrder.complete(draftOrder.id);
 
     console.log(`✅ Draft order completed. Invoice URL: ${completedDraftOrder.invoice_url}`);
 
     // Return the invoice URL (this is the checkout page)
-    res.status(200).json({
+    const successResponse = {
       success: true,
       checkout_url: completedDraftOrder.invoice_url,
       draft_order_id: draftOrder.id,
       order_name: draftOrder.name,
       total_price: completedDraftOrder.total_price,
       line_items_count: lineItems.length
-    });
+    };
+
+    console.log('✅ Returning success response:', successResponse);
+
+    return res.status(200).json(successResponse);
 
   } catch (error) {
     console.error('❌ Draft order creation error:', error);
